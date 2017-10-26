@@ -1596,13 +1596,30 @@ static int mdss_fb_resume(struct platform_device *pdev)
 static int mdss_fb_pm_suspend(struct device *dev)
 {
 	struct msm_fb_data_type *mfd = dev_get_drvdata(dev);
+	int rc = 0;
 
 	if (!mfd)
 		return -ENODEV;
 
 	dev_dbg(dev, "display pm suspend\n");
 
-	return mdss_fb_suspend_sub(mfd);
+	rc = mdss_fb_suspend_sub(mfd);
+
+	/*
+	 * Call MDSS footswitch control to ensure GDSC is
+	 * off after pm suspend call. There are cases when
+	 * mdss runtime call doesn't trigger even when clock
+	 * ref count is zero after fb pm suspend.
+	 */
+	if (!rc) {
+		if (mfd->mdp.footswitch_ctrl)
+			mfd->mdp.footswitch_ctrl(false);
+	} else {
+		pr_err("fb pm suspend failed, rc: %d\n", rc);
+	}
+
+	return rc;
+
 }
 
 static int mdss_fb_pm_resume(struct device *dev)
@@ -1621,6 +1638,9 @@ static int mdss_fb_pm_resume(struct device *dev)
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_enable(dev);
+
+	if (mfd->mdp.footswitch_ctrl)
+		mfd->mdp.footswitch_ctrl(true);
 
 	return mdss_fb_resume_sub(mfd);
 }
@@ -3400,6 +3420,10 @@ int mdss_fb_atomic_commit(struct fb_info *info,
 				MSMFB_ATOMIC_COMMIT, true, false);
 			if (mfd->panel.type == WRITEBACK_PANEL) {
 				output_layer = commit_v1->output_layer;
+				if (!output_layer) {
+					pr_err("Output layer is null\n");
+					goto end;
+				}
 				wb_change = !mdss_fb_is_wb_config_same(mfd,
 						commit_v1->output_layer);
 				if (wb_change) {
@@ -3601,7 +3625,11 @@ void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
 {
 	u32 frame_rate;
 
+#ifdef CONFIG_BOARD_MATA
+	var->xres = mdss_fb_get_panel_xres(pinfo) - 128;
+#else
 	var->xres = mdss_fb_get_panel_xres(pinfo);
+#endif
 	var->yres = pinfo->yres;
 	var->lower_margin = pinfo->lcdc.v_front_porch -
 		pinfo->prg_fet;
@@ -4887,6 +4915,15 @@ static int __ioctl_wait_idle(struct msm_fb_data_type *mfd, u32 cmd)
 	return ret;
 }
 
+static bool check_not_supported_ioctl(u32 cmd)
+{
+	return((cmd == MSMFB_OVERLAY_SET) || (cmd == MSMFB_OVERLAY_UNSET) ||
+		(cmd == MSMFB_OVERLAY_GET) || (cmd == MSMFB_OVERLAY_PREPARE) ||
+		(cmd == MSMFB_DISPLAY_COMMIT) || (cmd == MSMFB_OVERLAY_PLAY) ||
+		(cmd == MSMFB_BUFFER_SYNC) || (cmd == MSMFB_OVERLAY_QUEUE) ||
+		(cmd == MSMFB_NOTIFY_UPDATE));
+}
+
 /*
  * mdss_fb_do_ioctl() - MDSS Framebuffer ioctl function
  * @info:	pointer to framebuffer info
@@ -4920,6 +4957,11 @@ int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 	if (!pdata || pdata->panel_info.dynamic_switch_pending)
 		return -EPERM;
+
+	if (check_not_supported_ioctl(cmd)) {
+		pr_err("Unsupported ioctl\n");
+		return -EINVAL;
+	}
 
 	atomic_inc(&mfd->ioctl_ref_cnt);
 

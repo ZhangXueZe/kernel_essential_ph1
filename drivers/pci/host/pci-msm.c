@@ -4903,7 +4903,7 @@ static int msm_pcie_config_device_table(struct device *dev, void *pdev)
 				break;
 			}
 		} else if (msm_pcie_dev_tbl[i].bdf == bdf &&
-			pcidev == msm_pcie_dev_tbl[i].dev) {
+			    pcidev == msm_pcie_dev_tbl[i].dev) {
 			break;
 		}
 	}
@@ -5145,7 +5145,6 @@ int msm_pcie_enumerate(u32 rc_idx)
 
 out:
 	mutex_unlock(&dev->enumerate_lock);
-
 	return ret;
 }
 EXPORT_SYMBOL(msm_pcie_enumerate);
@@ -6735,11 +6734,11 @@ static int msm_pcie_pm_suspend(struct pci_dev *dev,
 		PCIE_DBG(pcie_dev, "RC%d: PM_Enter_L23 is NOT received\n",
 			pcie_dev->rc_idx);
 
-		msm_pcie_disable(pcie_dev, PM_PIPE_CLK | PM_CLK | PM_VREG);
-
 	if (pcie_dev->use_pinctrl && pcie_dev->pins_sleep)
 		pinctrl_select_state(pcie_dev->pinctrl,
 					pcie_dev->pins_sleep);
+
+	msm_pcie_disable(pcie_dev, PM_PIPE_CLK | PM_CLK | PM_VREG);
 
 	PCIE_DBG(pcie_dev, "RC%d: exit\n", pcie_dev->rc_idx);
 

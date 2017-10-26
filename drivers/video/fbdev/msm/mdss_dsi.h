@@ -387,6 +387,8 @@ struct dsi_err_container {
 	u32 err_cnt;
 	u32 err_time_delta;
 	u32 max_err_index;
+	u32 dsi_ack_err_cnt;
+	u32 dsi_ack_err_status;
 
 	u32 index;
 	s64 err_time[MAX_ERR_INDEX];
@@ -452,6 +454,7 @@ struct mdss_dsi_ctrl_pdata {
 	int disp_en_gpio;
 	int bklt_en_gpio;
 	bool bklt_en_gpio_invert;
+	bool bklt_en_gpio_state;
 	int lcd_mode_sel_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;

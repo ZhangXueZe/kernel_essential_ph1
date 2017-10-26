@@ -228,6 +228,7 @@ struct tadc_chip {
 	struct votable		*tadc_disable_votable;
 	struct work_struct	status_change_work;
 	struct notifier_block	nb;
+	u8			hwtrig_conv;
 };
 
 struct tadc_pt {
@@ -278,6 +279,78 @@ static const struct tadc_pt tadc_therm_3450b_68k[] = {
 	{ 931618,	-30000 },
 	{ 1254910,	-35000 },
 	{ 1712127,	-40000 },
+};
+
+static const struct tadc_pt tadc_therm_4050b_68k[] = {
+	{ 2552,		120000 },
+	{ 2914,		115000 },
+	{ 3340,		110000 },
+	{ 3841,		105000 },
+	{ 4433,		100000 },
+	{ 5138,		95000 },
+	{ 5978,		90000 },
+	{ 6985,		85000 },
+	{ 8198,		80000 },
+	{ 9666,		75000 },
+	{ 11451,	70000 },
+	{ 13635,	65000 },
+	{ 16320,	60000 },
+	{ 19641,	55000 },
+	{ 23774,	50000 },
+	{ 28950,	45000 },
+	{ 35475,	40000 },
+	{ 43758,	35000 },
+	{ 54351,	30000 },
+	{ 68000,	25000 },
+	{ 85729,	20000 },
+	{ 108953,	15000 },
+	{ 139646,	10000 },
+	{ 180590,	5000 },
+	{ 235747,	0 },
+	{ 310824,	-5000 },
+	{ 414139,	-10000 },
+	{ 557964,	-15000 },
+	{ 760641,	-20000 },
+	{ 1049967,	-25000 },
+	{ 1468689,	-30000 },
+	{ 2083552,	-35000 },
+	{ 3000494,	-40000 },
+};
+
+static const struct tadc_pt tadc_therm_4150b_68k[] = {
+	{ 2301,		120000 },
+	{ 2645,		115000 },
+	{ 3051,		110000 },
+	{ 3533,		105000 },
+	{ 4107,		100000 },
+	{ 4792,		95000 },
+	{ 5613,		90000 },
+	{ 6603,		85000 },
+	{ 7802,		80000 },
+	{ 9259,		75000 },
+	{ 11039,	70000 },
+	{ 13224,	65000 },
+	{ 15920,	60000 },
+	{ 19263,	55000 },
+	{ 23433,	50000 },
+	{ 28661,	45000 },
+	{ 35254,	40000 },
+	{ 43618,	35000 },
+	{ 54292,	30000 },
+	{ 68000,	25000 },
+	{ 85717,	20000 },
+	{ 108770,	15000 },
+	{ 138950,	10000 },
+	{ 178770,	5000 },
+	{ 231650,	0 },
+	{ 302380,	-5000 },
+	{ 397680,	-10000 },
+	{ 527030,	-15000 },
+	{ 703910,	-20000 },
+	{ 947570,	-25000 },
+	{ 1285700,	-30000 },
+	{ 1758300,	-35000 },
+	{ 2423600,	-40000 },
 };
 
 static bool tadc_is_reg_locked(struct tadc_chip *chip, u16 reg)
@@ -350,6 +423,26 @@ static int tadc_bulk_write(struct tadc_chip *chip, u16 reg, u8 *data,
 			goto unlock;
 		}
 	}
+
+unlock:
+	mutex_unlock(&chip->write_lock);
+	return rc;
+}
+
+static int tadc_masked_write(struct tadc_chip *chip, u16 reg, u8 mask, u8 data)
+{
+	int rc = 0;
+
+	mutex_lock(&chip->write_lock);
+	if (tadc_is_reg_locked(chip, reg)) {
+		rc = regmap_write(chip->regmap, (reg & 0xFF00) | 0xD0, 0xA5);
+		if (rc < 0) {
+			pr_err("Couldn't unlock secure register rc=%d\n", rc);
+			goto unlock;
+		}
+	}
+
+	rc = regmap_update_bits(chip->regmap, reg, mask, data);
 
 unlock:
 	mutex_unlock(&chip->write_lock);
@@ -880,6 +973,12 @@ static int tadc_disable_vote_callback(struct votable *votable,
 		if (timeleft == 0)
 			pr_err("Timed out waiting for eoc, disabling hw conversions regardless\n");
 
+		rc = tadc_read(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip),
+							&chip->hwtrig_conv, 1);
+		if (rc < 0) {
+			pr_err("Couldn't save hw conversions rc=%d\n", rc);
+			return rc;
+		}
 		rc = tadc_write(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip), 0x00);
 		if (rc < 0) {
 			pr_err("Couldn't disable hw conversions rc=%d\n", rc);
@@ -896,9 +995,10 @@ static int tadc_disable_vote_callback(struct votable *votable,
 			pr_err("Couldn't disable direct test mode rc=%d\n", rc);
 			return rc;
 		}
-		rc = tadc_write(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip), 0x07);
+		rc = tadc_write(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip),
+							chip->hwtrig_conv);
 		if (rc < 0) {
-			pr_err("Couldn't enable hw conversions rc=%d\n", rc);
+			pr_err("Couldn't restore hw conversions rc=%d\n", rc);
 			return rc;
 		}
 	}
@@ -987,6 +1087,18 @@ static int tadc_set_therm_table(struct tadc_chan_data *chan_data, u32 beta,
 	if (beta == 3450 && rtherm == 68000) {
 		chan_data->table = tadc_therm_3450b_68k;
 		chan_data->tablesize = ARRAY_SIZE(tadc_therm_3450b_68k);
+		return 0;
+	}
+
+	if (beta == 4050 && rtherm == 68000) {
+		chan_data->table = tadc_therm_4050b_68k;
+		chan_data->tablesize = ARRAY_SIZE(tadc_therm_4050b_68k);
+		return 0;
+	}
+
+	if (beta == 4150 && rtherm == 68000) {
+		chan_data->table = tadc_therm_4150b_68k;
+		chan_data->tablesize = ARRAY_SIZE(tadc_therm_4150b_68k);
 		return 0;
 	}
 
@@ -1126,13 +1238,20 @@ static int tadc_init_hw(struct tadc_chip *chip)
 		return rc;
 	}
 
-	/* enable all temperature hardware triggers */
-	rc = tadc_write(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip),
-							BIT(TADC_THERM1) |
-							BIT(TADC_THERM2) |
-							BIT(TADC_DIE_TEMP));
+	/* enable connector and die temp hardware triggers */
+	rc = tadc_masked_write(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip),
+					BIT(TADC_THERM2) | BIT(TADC_DIE_TEMP),
+					BIT(TADC_THERM2) | BIT(TADC_DIE_TEMP));
 	if (rc < 0) {
 		pr_err("Couldn't enable hardware triggers rc=%d\n", rc);
+		return rc;
+	}
+
+	/* save hw triggered conversion configuration */
+	rc = tadc_read(chip, TADC_HWTRIG_CONV_CH_EN_REG(chip),
+							&chip->hwtrig_conv, 1);
+	if (rc < 0) {
+		pr_err("Couldn't save hw conversions rc=%d\n", rc);
 		return rc;
 	}
 

@@ -677,6 +677,11 @@ static ssize_t mdss_dsi_cmd_state_write(struct file *file,
 	int *link_state = file->private_data;
 	char *input;
 
+	if (!count) {
+		pr_err("%s: Zero bytes to be written\n", __func__);
+		return -EINVAL;
+	}
+
 	input = kmalloc(count, GFP_KERNEL);
 	if (!input) {
 		pr_err("%s: Failed to allocate memory\n", __func__);
@@ -808,10 +813,15 @@ static ssize_t mdss_dsi_cmd_write(struct file *file, const char __user *p,
 
 	/* Writing in batches is possible */
 	ret = simple_write_to_buffer(string_buf, blen, ppos, p, count);
+	if (ret < 0) {
+		pr_err("%s: Failed to copy data\n", __func__);
+		mutex_unlock(&pcmds->dbg_mutex);
+		return -EINVAL;
+	}
 
-	string_buf[blen] = '\0';
+	string_buf[ret] = '\0';
 	pcmds->string_buf = string_buf;
-	pcmds->sblen = blen;
+	pcmds->sblen = count;
 	mutex_unlock(&pcmds->dbg_mutex);
 	return ret;
 }
@@ -4268,6 +4278,9 @@ int dsi_panel_device_register(struct platform_device *ctrl_pdev,
 						__func__, rc);
 		return rc;
 	}
+
+	/* default state of gpio is false */
+	ctrl_pdata->bklt_en_gpio_state = false;
 
 	pinfo->panel_max_fps = mdss_panel_get_framerate(pinfo);
 	pinfo->panel_max_vtotal = mdss_panel_get_vtotal(pinfo);

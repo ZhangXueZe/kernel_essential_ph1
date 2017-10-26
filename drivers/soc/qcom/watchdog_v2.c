@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -29,7 +29,12 @@
 #include <linux/wait.h>
 #include <soc/qcom/scm.h>
 #include <soc/qcom/memory_dump.h>
+#include <soc/qcom/minidump.h>
 #include <soc/qcom/watchdog.h>
+
+#ifdef CONFIG_ESSENTIAL_APR
+#include <essential/essential_reason.h>
+#endif
 
 #define MODULE_NAME "msm_watchdog"
 #define WDT0_ACCSCSSNBARK_INT 0
@@ -481,6 +486,10 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	unsigned long nanosec_rem;
 	unsigned long long t = sched_clock();
 
+	#ifdef CONFIG_ESSENTIAL_APR
+	qpnp_pon_set_restart_reason(REASON_KERNEL_WDOG);
+	#endif
+
 	nanosec_rem = do_div(t, 1000000000);
 	printk(KERN_INFO "Watchdog bark! Now = %lu.%06lu\n", (unsigned long) t,
 		nanosec_rem / 1000);
@@ -521,6 +530,8 @@ void register_scan_dump(struct msm_watchdog_data *wdog_dd)
 
 	dump_data->addr = virt_to_phys(dump_addr);
 	dump_data->len = wdog_dd->scandump_size;
+	strlcpy(dump_data->name, "KSCANDUMP", sizeof(dump_data->name));
+
 	dump_entry.id = MSM_DUMP_DATA_SCANDUMP;
 	dump_entry.addr = virt_to_phys(dump_data);
 	ret = msm_dump_data_register(MSM_DUMP_TABLE_APPS, &dump_entry);
@@ -605,6 +616,9 @@ static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 			cpu_data[cpu].addr = virt_to_phys(cpu_buf +
 							cpu * MAX_CPU_CTX_SIZE);
 			cpu_data[cpu].len = MAX_CPU_CTX_SIZE;
+			snprintf(cpu_data[cpu].name, sizeof(cpu_data[cpu].name),
+				"KCPU_CTX%d", cpu);
+
 			dump_entry.id = MSM_DUMP_DATA_CPU_CTX + cpu;
 			dump_entry.addr = virt_to_phys(&cpu_data[cpu]);
 			ret = msm_dump_data_register(MSM_DUMP_TABLE_APPS,
@@ -820,6 +834,7 @@ static int msm_watchdog_probe(struct platform_device *pdev)
 {
 	int ret;
 	struct msm_watchdog_data *wdog_dd;
+	struct md_region md_entry;
 
 	if (!pdev->dev.of_node || !enable)
 		return -ENODEV;
@@ -841,6 +856,15 @@ static int msm_watchdog_probe(struct platform_device *pdev)
 		goto err;
 	}
 	init_watchdog_data(wdog_dd);
+
+	/* Add wdog info to minidump table */
+	strlcpy(md_entry.name, "KWDOGDATA", sizeof(md_entry.name));
+	md_entry.virt_addr = (uintptr_t)wdog_dd;
+	md_entry.phys_addr = virt_to_phys(wdog_dd);
+	md_entry.size = sizeof(*wdog_dd);
+	if (msm_minidump_add_region(&md_entry))
+		pr_info("Failed to add RTB in Minidump\n");
+
 	return 0;
 err:
 	kzfree(wdog_dd);
